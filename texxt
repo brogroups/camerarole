@@ -1,0 +1,1475 @@
+import { Telegraf, Scenes, session, Markup } from 'telegraf';
+import dotenv from 'dotenv';
+import fs from 'fs';
+import { promises as fsp } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const ADMIN_IDS_RAW = process.env.ADMIN_IDS || process.env.ADMIN_ID || '';
+const ADMIN_IDS = ADMIN_IDS_RAW
+  .split(',')
+  .map((id) => parseInt(String(id).trim(), 10))
+  .filter((id) => !Number.isNaN(id));
+
+const DATA_PATH = path.join(__dirname, 'data.json');
+
+if (!BOT_TOKEN) {
+  console.error('CRITICAL ERROR: BOT_TOKEN is missing in .env');
+  process.exit(1);
+}
+
+const ORDER_STATUS = {
+  NEW: 'Yangi',
+  WAITING_PAYMENT: 'To‘lov kutilmoqda',
+  PENDING_VERIFY: 'To‘lov tekshirilmoqda',
+  CONFIRMED: 'Tasdiqlandi',
+  PROCESSING: 'Jarayonda',
+  COMPLETED: 'Bajarildi',
+  CANCELED: 'Bekor qilindi',
+};
+
+const PAYMENT_STATUS = {
+  PENDING: 'Kutilmoqda',
+  APPROVED: 'Tasdiqlandi',
+  REJECTED: 'Rad etildi',
+};
+
+const DEFAULT_DATA = {
+  counters: {
+    categories: 0,
+    services: 0,
+    orders: 0,
+    payments: 0,
+    payment_methods: 0,
+    logs: 0,
+  },
+  users: [],
+  categories: [],
+  services: [],
+  orders: [],
+  payments: [],
+  payment_methods: [],
+  settings: {
+    brand_name: 'Pro Service Bot',
+    support_username: 'admin_username',
+    welcome_text:
+      '👋 Assalomu alaykum!\n\nBizning professional xizmatlar botimizga xush kelibsiz. Pastdagi menyu orqali xizmatlar, buyurtmalar va yordam bo‘limlaridan foydalanishingiz mumkin.',
+    rules_text:
+      '📌 Qoidalar:\n\n1) Buyurtma yuborilgan ma’lumotlar asosida qabul qilinadi.\n2) Noto‘g‘ri username/link yuborilishi foydalanuvchi mas’uliyatida.\n3) To‘lov tasdiqlangach buyurtma ishga olinadi.\n4) Har qanday nizoli vaziyatda admin qarori yakuniy hisoblanadi.',
+    faq_text:
+      '❓ Savol-javob:\n\n— Buyurtma qanday beriladi?\nXizmatni tanlang va kerakli ma’lumotlarni yuboring.\n\n— To‘lov qanday qilinadi?\nTo‘lov usulini tanlab, chek rasmini yuborasiz.\n\n— Admin bilan qanday bog‘lanaman?\nMenyudagi Admin tugmasi orqali.',
+    force_join_enabled: false,
+    force_join_channels: [],
+  },
+  logs: [],
+};
+
+let dbData = null;
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function ensureTable(table) {
+  if (!dbData[table]) dbData[table] = [];
+  return dbData[table];
+}
+
+function ensureSettings() {
+  if (!dbData.settings) dbData.settings = clone(DEFAULT_DATA.settings);
+  return dbData.settings;
+}
+
+async function ensureDataFile() {
+  if (!fs.existsSync(DATA_PATH)) {
+    await fsp.writeFile(DATA_PATH, JSON.stringify(DEFAULT_DATA, null, 2), 'utf8');
+  }
+}
+
+async function loadData() {
+  await ensureDataFile();
+  const raw = await fsp.readFile(DATA_PATH, 'utf8');
+  try {
+    dbData = JSON.parse(raw);
+  } catch {
+    dbData = clone(DEFAULT_DATA);
+    await saveData();
+  }
+
+  dbData.counters = { ...DEFAULT_DATA.counters, ...(dbData.counters || {}) };
+  dbData.users = Array.isArray(dbData.users) ? dbData.users : [];
+  dbData.categories = Array.isArray(dbData.categories) ? dbData.categories : [];
+  dbData.services = Array.isArray(dbData.services) ? dbData.services : [];
+  dbData.orders = Array.isArray(dbData.orders) ? dbData.orders : [];
+  dbData.payments = Array.isArray(dbData.payments) ? dbData.payments : [];
+  dbData.payment_methods = Array.isArray(dbData.payment_methods) ? dbData.payment_methods : [];
+  dbData.logs = Array.isArray(dbData.logs) ? dbData.logs : [];
+  dbData.settings = { ...DEFAULT_DATA.settings, ...(dbData.settings || {}) };
+
+  return dbData;
+}
+
+async function saveData() {
+  if (!dbData) dbData = clone(DEFAULT_DATA);
+  await fsp.writeFile(DATA_PATH, JSON.stringify(dbData, null, 2), 'utf8');
+}
+
+function nextId(table) {
+  if (!dbData.counters) dbData.counters = clone(DEFAULT_DATA.counters);
+  if (typeof dbData.counters[table] !== 'number') dbData.counters[table] = 0;
+  dbData.counters[table] += 1;
+  return dbData.counters[table];
+}
+
+async function logAction(action, details = '') {
+  ensureTable('logs').push({
+    id: nextId('logs'),
+    action,
+    details: String(details),
+    created_at: nowIso(),
+  });
+  await saveData();
+}
+
+function getSetting(key, fallback = '') {
+  return ensureSettings()[key] ?? fallback;
+}
+
+async function setSetting(key, value) {
+  ensureSettings()[key] = value;
+  await saveData();
+}
+
+function isAdmin(ctx) {
+  return ADMIN_IDS.includes(Number(ctx.from?.id));
+}
+
+function safeText(value) {
+  return String(value || '').trim();
+}
+
+function escapeHtml(text) {
+  return String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function formatPrice(price) {
+  return `${Number(price || 0).toLocaleString('uz-UZ')} so‘m`;
+}
+
+function cleanSupportUsername(username) {
+  return safeText(username).replace(/^@+/, '');
+}
+
+function validateUsername(value) {
+  return /^@?[a-zA-Z0-9_]{5,32}$/.test(safeText(value));
+}
+
+function validateLink(value) {
+  return /^(https?:\/\/)?([\w-]+\.)+[\w-]{2,}(\/\S*)?$/i.test(safeText(value));
+}
+
+function normalizeLink(value) {
+  const raw = safeText(value);
+  if (!raw) return raw;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return `https://${raw}`;
+}
+
+function validateQuantity(value) {
+  return /^[0-9]{1,9}$/.test(safeText(value));
+}
+
+function validateAmount(value) {
+  return /^[0-9]{3,12}$/.test(safeText(value));
+}
+
+function findUserByTelegramId(telegramId) {
+  return ensureTable('users').find((u) => Number(u.telegram_id) === Number(telegramId)) || null;
+}
+
+function findCategoryById(id) {
+  return ensureTable('categories').find((c) => Number(c.id) === Number(id)) || null;
+}
+
+function findServiceById(id) {
+  return ensureTable('services').find((s) => Number(s.id) === Number(id)) || null;
+}
+
+function findOrderById(id) {
+  return ensureTable('orders').find((o) => Number(o.id) === Number(id)) || null;
+}
+
+function findPaymentByOrderId(orderId) {
+  return ensureTable('payments').find((p) => Number(p.order_id) === Number(orderId)) || null;
+}
+
+function findPaymentMethodById(id) {
+  return ensureTable('payment_methods').find((m) => Number(m.id) === Number(id)) || null;
+}
+
+function userMainKeyboard(admin = false) {
+  const rows = [
+    ['🛍 Xizmatlar', '📦 Buyurtmalarim'],
+    ['💳 To‘lov usullari', '📩 Admin bilan bog‘lanish'],
+    ['❓ Yordam', 'ℹ️ Bot haqida'],
+  ];
+
+  if (admin) rows.push(['⚙️ Admin panel']);
+  return Markup.keyboard(rows).resize();
+}
+
+function adminMainKeyboard() {
+  return Markup.keyboard([
+    ['📊 Statistika', '📦 Buyurtmalar'],
+    ['💰 To‘lovlar', '📣 Xabar yuborish'],
+    ['🗂 Kategoriyalar', '🛠 Xizmatlar'],
+    ['🧾 To‘lov usullari', '⚙️ Sozlamalar'],
+    ['👥 Foydalanuvchilar', '🏠 Asosiy menyu'],
+  ]).resize();
+}
+
+function backMainInline() {
+  return [Markup.button.callback('🏠 Asosiy menyu', 'BACK_MAIN_MENU')];
+}
+
+function buildCategoriesKeyboard() {
+  const categories = ensureTable('categories')
+    .filter((c) => Number(c.is_active) === 1)
+    .sort((a, b) => Number(a.sort_order) - Number(b.sort_order));
+
+  const buttons = categories.map((c) => [Markup.button.callback(c.title, `CAT_${c.id}`)]);
+  buttons.push(backMainInline());
+  return Markup.inlineKeyboard(buttons);
+}
+
+function buildSettingsKeyboard() {
+  const enabled = getSetting('force_join_enabled', false) ? '✅ Yoqilgan' : '❌ O‘chirilgan';
+  return Markup.inlineKeyboard([
+    [Markup.button.callback(`Majburiy obuna: ${enabled}`, 'TOGGLE_FORCE_JOIN')],
+    [Markup.button.callback('📢 Kanallar ro‘yxati', 'VIEW_FORCE_CHANNELS')],
+    [Markup.button.callback('➕ Kanal qo‘shish', 'ADD_FORCE_CHANNEL')],
+    [Markup.button.callback('➖ Kanal o‘chirish', 'REMOVE_FORCE_CHANNEL')],
+    [Markup.button.callback('✏️ Welcome matn', 'EDIT_WELCOME_TEXT')],
+    [Markup.button.callback('✏️ Yordam matn', 'EDIT_FAQ_TEXT')],
+    [Markup.button.callback('✏️ Qoidalar matn', 'EDIT_RULES_TEXT')],
+    [Markup.button.callback('✏️ Admin username', 'EDIT_SUPPORT_USERNAME')],
+  ]);
+}
+
+function buildOrderAdminActions(orderId) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('✅ To‘lovni tasdiqlash', `APPROVE_PAY_${orderId}`)],
+    [Markup.button.callback('❌ To‘lovni rad etish', `REJECT_PAY_${orderId}`)],
+    [Markup.button.callback('🚀 Jarayonga olish', `START_WORK_${orderId}`)],
+    [Markup.button.callback('🏁 Bajarildi', `COMPLETE_ORDER_${orderId}`)],
+    [Markup.button.callback('🛑 Bekor qilish', `ADMIN_CANCEL_ORDER_${orderId}`)],
+  ]);
+}
+
+async function saveUser(ctx) {
+  if (!ctx.from || ctx.chat?.type !== 'private') return;
+
+  const telegramId = Number(ctx.from.id);
+  const user = findUserByTelegramId(telegramId);
+
+  if (user) {
+    user.first_name = ctx.from.first_name || user.first_name || 'Foydalanuvchi';
+    user.last_name = ctx.from.last_name || user.last_name || '';
+    user.username = ctx.from.username || user.username || null;
+    user.last_active = nowIso();
+  } else {
+    ensureTable('users').push({
+      telegram_id: telegramId,
+      first_name: ctx.from.first_name || 'Foydalanuvchi',
+      last_name: ctx.from.last_name || '',
+      username: ctx.from.username || null,
+      role: isAdmin(ctx) ? 'admin' : 'user',
+      is_banned: 0,
+      join_date: nowIso(),
+      last_active: nowIso(),
+    });
+  }
+
+  await saveData();
+}
+
+async function seedInitialData() {
+  const categories = ensureTable('categories');
+  const services = ensureTable('services');
+  const paymentMethods = ensureTable('payment_methods');
+
+  if (!categories.length) {
+    const seedCategories = [
+      { title: '🤖 Telegram bot xizmatlari', sort_order: 1, is_active: 1 },
+      { title: '🌐 Web sayt xizmatlari', sort_order: 2, is_active: 1 },
+      { title: '🎨 Dizayn xizmatlari', sort_order: 3, is_active: 1 },
+      { title: '📦 Maxsus buyurtma', sort_order: 4, is_active: 1 },
+    ];
+
+    for (const item of seedCategories) {
+      categories.push({
+        id: nextId('categories'),
+        ...item,
+        created_at: nowIso(),
+      });
+    }
+  }
+
+  if (!services.length) {
+    const botCat = categories.find((c) => c.title.includes('Telegram bot'));
+    const webCat = categories.find((c) => c.title.includes('Web sayt'));
+    const designCat = categories.find((c) => c.title.includes('Dizayn'));
+    const customCat = categories.find((c) => c.title.includes('Maxsus'));
+
+    const seedServices = [
+      {
+        category_id: botCat?.id,
+        title: 'Telegram bot — Start paket',
+        description: 'Katalog, aloqa, buyurtma va oddiy admin panel bilan tayyor bot.',
+        price: 450000,
+        delivery_time: '2-5 kun',
+        required_fields: ['username', 'note'],
+        notes: 'Loyiha texnik topshirig‘i asosida moslashtiriladi.',
+        is_active: 1,
+      },
+      {
+        category_id: botCat?.id,
+        title: 'Telegram bot — Premium paket',
+        description: 'To‘liq admin panel, to‘lov, statistika va maxsus flowlar bilan premium bot.',
+        price: 1500000,
+        delivery_time: '5-12 kun',
+        required_fields: ['username', 'note'],
+        notes: 'Professional darajadagi individual loyiha.',
+        is_active: 1,
+      },
+      {
+        category_id: webCat?.id,
+        title: 'Landing page',
+        description: 'Zamonaviy bir sahifalik sotuv yoki xizmat sayti.',
+        price: 700000,
+        delivery_time: '3-7 kun',
+        required_fields: ['link', 'note'],
+        notes: 'Dizayn va moslashuvchan layout bilan.',
+        is_active: 1,
+      },
+      {
+        category_id: designCat?.id,
+        title: 'Logo va brending',
+        description: 'Logo, rang palitrasi va brend yo‘nalishi.',
+        price: 300000,
+        delivery_time: '2-4 kun',
+        required_fields: ['note'],
+        notes: 'Figma/source fayllar bilan topshiriladi.',
+        is_active: 1,
+      },
+      {
+        category_id: customCat?.id,
+        title: 'Maxsus xizmat buyurtmasi',
+        description: 'Shaxsiy texnik topshiriq bo‘yicha individual loyiha.',
+        price: 0,
+        delivery_time: 'Kelishiladi',
+        required_fields: ['note'],
+        notes: 'Narx loyiha murakkabligiga qarab belgilanadi.',
+        is_active: 1,
+      },
+    ];
+
+    for (const item of seedServices) {
+      if (!item.category_id) continue;
+      services.push({ id: nextId('services'), created_at: nowIso(), ...item });
+    }
+  }
+
+  if (!paymentMethods.length) {
+    const seedMethods = [
+      {
+        title: '💳 Click / Uzcard',
+        details: 'Karta: 8600 0000 0000 0000\nEga: Ism Familiya',
+        is_active: 1,
+      },
+      {
+        title: '🏦 Humo',
+        details: 'Karta: 9860 0000 0000 0000\nEga: Ism Familiya',
+        is_active: 1,
+      },
+    ];
+
+    for (const item of seedMethods) {
+      paymentMethods.push({ id: nextId('payment_methods'), created_at: nowIso(), ...item });
+    }
+  }
+
+  await saveData();
+}
+
+async function initDB() {
+  await loadData();
+  await seedInitialData();
+}
+
+async function getForceJoinChannels() {
+  const value = getSetting('force_join_channels', []);
+  return Array.isArray(value) ? value : [];
+}
+
+async function isForceJoinPassed(ctx) {
+  if (!getSetting('force_join_enabled', false)) return true;
+
+  const channels = await getForceJoinChannels();
+  if (!channels.length) return true;
+
+  for (const item of channels) {
+    const chatId = item.chat_id || item.username;
+    if (!chatId) continue;
+
+    try {
+      const member = await ctx.telegram.getChatMember(chatId, ctx.from.id);
+      const status = member?.status;
+      const ok = ['creator', 'administrator', 'member'].includes(status);
+      if (!ok) return false;
+    } catch {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+async function showForceJoinMessage(ctx) {
+  const channels = await getForceJoinChannels();
+  const buttons = [];
+
+  for (const item of channels) {
+    if (item.username) {
+      buttons.push([Markup.button.url(item.title || `@${item.username}`, `https://t.me/${String(item.username).replace(/^@/, '')}`)]);
+    }
+  }
+
+  buttons.push([Markup.button.callback('✅ Tekshirish', 'CHECK_FORCE_JOIN')]);
+
+  const text =
+    '📢 Botdan foydalanish uchun avval quyidagi kanal(lar)ga obuna bo‘ling, so‘ng "Tekshirish" tugmasini bosing.';
+
+  if (ctx.callbackQuery) {
+    try {
+      await ctx.editMessageText(text, { reply_markup: Markup.inlineKeyboard(buttons).reply_markup });
+      return;
+    } catch {}
+  }
+
+  await ctx.reply(text, { reply_markup: Markup.inlineKeyboard(buttons).reply_markup });
+}
+
+async function guardPrivateAndSubscribed(ctx, next) {
+  if (!ctx.from) return;
+  if (ctx.chat?.type && ctx.chat.type !== 'private') return;
+
+  const passed = await isForceJoinPassed(ctx);
+  if (!passed) {
+    if (ctx.callbackQuery) {
+      try {
+        await ctx.answerCbQuery('Avval kanalga obuna bo‘ling.', { show_alert: true });
+      } catch {}
+    }
+    await showForceJoinMessage(ctx);
+    return;
+  }
+
+  return next();
+}
+
+function buildPaymentMethodsInline(prefix, includeCancel = true) {
+  const methods = ensureTable('payment_methods').filter((m) => Number(m.is_active) === 1);
+  const buttons = methods.map((m) => [Markup.button.callback(m.title, `${prefix}${m.id}`)]);
+  if (includeCancel) buttons.push([Markup.button.callback('❌ Bekor qilish', 'CANCEL_ORDER_SCENE')]);
+  return Markup.inlineKeyboard(buttons);
+}
+
+function formatOrderDetails(details) {
+  if (!details) return '-';
+  try {
+    const parsed = typeof details === 'string' ? JSON.parse(details) : details;
+    return Object.entries(parsed)
+      .map(([k, v]) => `• ${k}: ${v}`)
+      .join('\n');
+  } catch {
+    return String(details);
+  }
+}
+
+const bot = new Telegraf(BOT_TOKEN);
+
+const orderScene = new Scenes.WizardScene(
+  'ORDER_SCENE',
+  async (ctx) => {
+    const serviceId = Number(ctx.scene.state.serviceId);
+    const service = findServiceById(serviceId);
+
+    if (!service || Number(service.is_active) !== 1) {
+      await ctx.reply('Xizmat topilmadi.', userMainKeyboard(isAdmin(ctx)));
+      return ctx.scene.leave();
+    }
+
+    ctx.scene.state.service = clone(service);
+    ctx.scene.state.responses = {};
+    ctx.scene.state.fields = Array.isArray(service.required_fields)
+      ? clone(service.required_fields)
+      : [];
+    ctx.scene.state.currentFieldIndex = 0;
+
+    if (Number(service.price) <= 0) {
+      ctx.scene.state.fields = ['note'];
+    }
+
+    const info = [];
+    info.push(`📦 Xizmat: ${service.title}`);
+    info.push(`📝 ${service.description || '-'}`);
+    info.push(`💰 Narx: ${service.price > 0 ? formatPrice(service.price) : 'Kelishiladi'}`);
+    info.push(`⏱ Muddat: ${service.delivery_time || '-'}`);
+    if (service.notes) info.push(`ℹ️ ${service.notes}`);
+
+    await ctx.reply(info.join('\n'), Markup.keyboard([['❌ Bekor qilish']]).resize());
+
+    const field = ctx.scene.state.fields[0];
+    const prompts = {
+      username: '👤 Telegram username yuboring. Masalan: @username',
+      link: '🔗 Havola yuboring.',
+      note: '📝 Buyurtma tafsilotini yozing.',
+      quantity: '🔢 Miqdorni kiriting.',
+      amount: '💰 Kelishilgan summani yuboring.',
+    };
+
+    await ctx.reply(prompts[field] || 'Kerakli ma’lumotni yuboring.');
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    if (ctx.message?.text === '❌ Bekor qilish') {
+      await ctx.reply('Buyurtma bekor qilindi.', userMainKeyboard(isAdmin(ctx)));
+      return ctx.scene.leave();
+    }
+
+    if (!ctx.message?.text) {
+      await ctx.reply('Iltimos, matn ko‘rinishida ma’lumot yuboring.');
+      return;
+    }
+
+    const field = ctx.scene.state.fields[ctx.scene.state.currentFieldIndex];
+    const value = safeText(ctx.message.text);
+
+    if (field === 'username' && !validateUsername(value)) {
+      await ctx.reply('Username noto‘g‘ri. Masalan: @username');
+      return;
+    }
+
+    if (field === 'link' && !validateLink(value)) {
+      await ctx.reply('Link noto‘g‘ri kiritildi.');
+      return;
+    }
+
+    if (field === 'quantity' && !validateQuantity(value)) {
+      await ctx.reply('Miqdor faqat raqam bo‘lishi kerak.');
+      return;
+    }
+
+    if (field === 'amount' && !validateAmount(value)) {
+      await ctx.reply('Summa noto‘g‘ri kiritildi.');
+      return;
+    }
+
+    ctx.scene.state.responses[field] = field === 'link' ? normalizeLink(value) : value;
+    ctx.scene.state.currentFieldIndex += 1;
+
+    if (ctx.scene.state.currentFieldIndex < ctx.scene.state.fields.length) {
+      const nextField = ctx.scene.state.fields[ctx.scene.state.currentFieldIndex];
+      const prompts = {
+        username: '👤 Username yuboring.',
+        link: '🔗 Link yuboring.',
+        note: '📝 Tafsilotni yozing.',
+        quantity: '🔢 Miqdorni kiriting.',
+        amount: '💰 Summani kiriting.',
+      };
+      await ctx.reply(prompts[nextField] || 'Keyingi ma’lumotni yuboring.');
+      return;
+    }
+
+    const service = ctx.scene.state.service;
+    const dynamicAmount = Number(service.price) > 0 ? Number(service.price) : 0;
+    ctx.scene.state.amount = dynamicAmount;
+
+    let summary = `📋 Buyurtma yakuni:\n\n`;
+    summary += `📦 Xizmat: ${service.title}\n`;
+    summary += `💰 Narx: ${dynamicAmount > 0 ? formatPrice(dynamicAmount) : 'Kelishiladi'}\n`;
+    summary += `⏱ Muddat: ${service.delivery_time || '-'}\n\n`;
+    summary += `${formatOrderDetails(ctx.scene.state.responses)}\n\n`;
+
+    if (dynamicAmount > 0) {
+      summary += 'Davom etish uchun pastdagi tugmani bosing.';
+      await ctx.reply(summary, {
+        reply_markup: Markup.inlineKeyboard([
+          [Markup.button.callback('➡️ To‘lovga o‘tish', 'CONTINUE_TO_PAYMENT')],
+          [Markup.button.callback('❌ Bekor qilish', 'CANCEL_ORDER_SCENE')],
+        ]).reply_markup,
+      });
+      return ctx.wizard.next();
+    }
+
+    summary += 'Bu xizmat uchun narx admin bilan kelishiladi. Buyurtmani yuborishni xohlaysizmi?';
+    await ctx.reply(summary, {
+      reply_markup: Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Buyurtmani yuborish', 'SUBMIT_FREEFORM_ORDER')],
+        [Markup.button.callback('❌ Bekor qilish', 'CANCEL_ORDER_SCENE')],
+      ]).reply_markup,
+    });
+
+    return ctx.wizard.selectStep(4);
+  },
+  async (ctx) => {
+    if (ctx.callbackQuery?.data?.startsWith('ORDER_METHOD_')) {
+      const methodId = Number(ctx.callbackQuery.data.replace('ORDER_METHOD_', ''));
+      const method = findPaymentMethodById(methodId);
+
+      if (!method || Number(method.is_active) !== 1) {
+        await ctx.answerCbQuery('To‘lov usuli topilmadi.');
+        return;
+      }
+
+      ctx.scene.state.selectedMethod = method;
+      ctx.scene.state.payerName = ctx.from?.username ? `@${ctx.from.username}` : (ctx.from?.first_name || 'User');
+
+      await ctx.answerCbQuery();
+      const text = `💳 ${method.title}\n\n${method.details}\n\n💰 To‘lov miqdori: ${formatPrice(ctx.scene.state.amount)}\n\n📸 To‘lov cheki rasmini yuboring.`;
+      try {
+        await ctx.editMessageText(text);
+      } catch {
+        await ctx.reply(text);
+      }
+      await ctx.reply('📸 Chek rasmini yuboring.', Markup.keyboard([['❌ Bekor qilish']]).resize());
+      return ctx.wizard.next();
+    }
+  },
+  async (ctx) => {
+    if (ctx.message?.text === '❌ Bekor qilish') {
+      await ctx.reply('Buyurtma bekor qilindi.', userMainKeyboard(isAdmin(ctx)));
+      return ctx.scene.leave();
+    }
+
+    if (!ctx.message?.photo) {
+      await ctx.reply('Iltimos, to‘lov cheki rasmini yuboring.');
+      return;
+    }
+
+    const fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+    const service = ctx.scene.state.service;
+    const orderId = nextId('orders');
+    const paymentId = nextId('payments');
+    const userId = Number(ctx.from.id);
+
+    ensureTable('orders').push({
+      id: orderId,
+      user_id: userId,
+      service_id: service.id,
+      service_title: service.title,
+      amount: Number(ctx.scene.state.amount),
+      status: ORDER_STATUS.PENDING_VERIFY,
+      details: clone(ctx.scene.state.responses),
+      admin_comment: '',
+      created_at: nowIso(),
+      updated_at: nowIso(),
+    });
+
+    ensureTable('payments').push({
+      id: paymentId,
+      order_id: orderId,
+      user_id: userId,
+      method: ctx.scene.state.selectedMethod.title,
+      amount: Number(ctx.scene.state.amount),
+      payer_name: ctx.scene.state.payerName,
+      receipt_file_id: fileId,
+      status: PAYMENT_STATUS.PENDING,
+      admin_reason: '',
+      created_at: nowIso(),
+    });
+
+    await saveData();
+    await logAction('ORDER_CREATED', `order_id=${orderId}; type=standard; user_id=${userId}`);
+
+    await ctx.reply(
+      `✅ Buyurtmangiz qabul qilindi.\n\nBuyurtma ID: #${orderId}\nXizmat: ${service.title}\nSumma: ${formatPrice(ctx.scene.state.amount)}\nHolat: ${ORDER_STATUS.PENDING_VERIFY}`,
+      userMainKeyboard(isAdmin(ctx))
+    );
+
+    for (const adminId of ADMIN_IDS) {
+      try {
+        const caption = [
+          `🆕 Yangi buyurtma #${orderId}`,
+          `👤 Mijoz: ${ctx.from.first_name || 'User'}${ctx.from.username ? ` (@${ctx.from.username})` : ''}`,
+          `📦 Xizmat: ${service.title}`,
+          `💰 Summa: ${formatPrice(ctx.scene.state.amount)}`,
+          `💳 Usul: ${ctx.scene.state.selectedMethod.title}`,
+          '',
+          '📝 Tafsilotlar:',
+          formatOrderDetails(ctx.scene.state.responses),
+        ].join('\n');
+
+        await ctx.telegram.sendPhoto(adminId, fileId, {
+          caption,
+          reply_markup: buildOrderAdminActions(orderId).reply_markup,
+        });
+      } catch (error) {
+        console.error('Admin notify error:', error);
+      }
+    }
+
+    return ctx.scene.leave();
+  },
+  async (ctx) => {
+    if (ctx.callbackQuery?.data === 'SUBMIT_FREEFORM_ORDER') {
+      const service = ctx.scene.state.service;
+      const orderId = nextId('orders');
+      const userId = Number(ctx.from.id);
+
+      ensureTable('orders').push({
+        id: orderId,
+        user_id: userId,
+        service_id: service.id,
+        service_title: service.title,
+        amount: 0,
+        status: ORDER_STATUS.NEW,
+        details: clone(ctx.scene.state.responses),
+        admin_comment: 'Narx kelishiladi',
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      });
+
+      await saveData();
+      await logAction('FREEFORM_ORDER_CREATED', `order_id=${orderId}; user_id=${userId}`);
+
+      await ctx.answerCbQuery('Buyurtma yuborildi');
+      try {
+        await ctx.editMessageText(`✅ Buyurtma qabul qilindi.\n\nBuyurtma ID: #${orderId}\nHolat: ${ORDER_STATUS.NEW}\nAdmin tez orada siz bilan bog‘lanadi.`);
+      } catch {
+        await ctx.reply(`✅ Buyurtma qabul qilindi. Buyurtma ID: #${orderId}`, userMainKeyboard(isAdmin(ctx)));
+      }
+
+      for (const adminId of ADMIN_IDS) {
+        try {
+          await ctx.telegram.sendMessage(
+            adminId,
+            `🆕 Yangi maxsus buyurtma #${orderId}\n\n👤 Mijoz: ${ctx.from.first_name || 'User'}${ctx.from.username ? ` (@${ctx.from.username})` : ''}\n📦 Xizmat: ${service.title}\n📝 Tafsilotlar:\n${formatOrderDetails(ctx.scene.state.responses)}`,
+            { reply_markup: buildOrderAdminActions(orderId).reply_markup }
+          );
+        } catch (error) {
+          console.error(error);
+        }
+      }
+
+      return ctx.scene.leave();
+    }
+  }
+);
+
+orderScene.action('CONTINUE_TO_PAYMENT', async (ctx) => {
+  await ctx.answerCbQuery();
+  try {
+    await ctx.editMessageText('To‘lov usulini tanlang:');
+  } catch {}
+  await ctx.reply('💳 To‘lov usulini tanlang:', { reply_markup: buildPaymentMethodsInline('ORDER_METHOD_').reply_markup });
+  return ctx.wizard.selectStep(2);
+});
+
+orderScene.action('CANCEL_ORDER_SCENE', async (ctx) => {
+  await ctx.answerCbQuery('Bekor qilindi');
+  try {
+    await ctx.editMessageText('❌ Buyurtma bekor qilindi.');
+  } catch {}
+  await ctx.reply('Asosiy menyu:', userMainKeyboard(isAdmin(ctx)));
+  return ctx.scene.leave();
+});
+
+const broadcastScene = new Scenes.WizardScene(
+  'BROADCAST_SCENE',
+  async (ctx) => {
+    await ctx.reply('📣 Yuboriladigan xabarni yuboring. Matn, rasm yoki video bo‘lishi mumkin.', Markup.keyboard([['❌ Bekor qilish']]).resize());
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    if (ctx.message?.text === '❌ Bekor qilish') {
+      await ctx.reply('Bekor qilindi.', adminMainKeyboard());
+      return ctx.scene.leave();
+    }
+
+    if (!ctx.message) {
+      await ctx.reply('Iltimos, xabar yuboring.');
+      return;
+    }
+
+    ctx.scene.state.broadcastMessageId = ctx.message.message_id;
+    ctx.scene.state.broadcastChatId = ctx.chat.id;
+
+    await ctx.reply('Barcha foydalanuvchilarga yuborilsinmi?', {
+      reply_markup: Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Ha', 'CONFIRM_BROADCAST')],
+        [Markup.button.callback('❌ Yo‘q', 'CANCEL_BROADCAST')],
+      ]).reply_markup,
+    });
+
+    return ctx.wizard.next();
+  }
+);
+
+broadcastScene.action('CONFIRM_BROADCAST', async (ctx) => {
+  const users = ensureTable('users').filter((u) => Number(u.is_banned) !== 1);
+  let ok = 0;
+  let fail = 0;
+
+  await ctx.editMessageText('⏳ Xabar yuborilmoqda...');
+
+  for (const user of users) {
+    try {
+      await ctx.telegram.copyMessage(user.telegram_id, ctx.scene.state.broadcastChatId, ctx.scene.state.broadcastMessageId);
+      ok += 1;
+    } catch {
+      fail += 1;
+    }
+  }
+
+  await logAction('BROADCAST_SENT', `success=${ok}; fail=${fail}`);
+  await ctx.reply(`✅ Yakunlandi.\n\nJami: ${users.length}\nYuborildi: ${ok}\nXatolik: ${fail}`, adminMainKeyboard());
+  return ctx.scene.leave();
+});
+
+broadcastScene.action('CANCEL_BROADCAST', async (ctx) => {
+  await ctx.editMessageText('❌ Bekor qilindi.');
+  await ctx.reply('Admin panel:', adminMainKeyboard());
+  return ctx.scene.leave();
+});
+
+const settingsEditScene = new Scenes.WizardScene(
+  'SETTINGS_EDIT_SCENE',
+  async (ctx) => {
+    const mode = ctx.scene.state.mode;
+
+    const prompts = {
+      welcome_text: 'Yangi welcome matnini yuboring.',
+      faq_text: 'Yangi yordam matnini yuboring.',
+      rules_text: 'Yangi qoidalar matnini yuboring.',
+      support_username: 'Yangi admin username yuboring. Masalan: @your_username',
+      add_force_channel: 'Kanal username yuboring. Masalan: @kanalnomi',
+      remove_force_channel: 'O‘chiriladigan kanal username yuboring. Masalan: @kanalnomi',
+    };
+
+    await ctx.reply(prompts[mode] || 'Yangi qiymatni yuboring.', Markup.keyboard([['❌ Bekor qilish']]).resize());
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    if (ctx.message?.text === '❌ Bekor qilish') {
+      await ctx.reply('Bekor qilindi.', adminMainKeyboard());
+      return ctx.scene.leave();
+    }
+
+    if (!ctx.message?.text) {
+      await ctx.reply('Iltimos, matn yuboring.');
+      return;
+    }
+
+    const mode = ctx.scene.state.mode;
+    const value = safeText(ctx.message.text);
+
+    if (mode === 'support_username') {
+      if (!/^@?[a-zA-Z0-9_]{5,32}$/.test(value)) {
+        await ctx.reply('Username noto‘g‘ri. Masalan: @admin_username');
+        return;
+      }
+      await setSetting('support_username', cleanSupportUsername(value));
+      await ctx.reply('✅ Admin username yangilandi.', adminMainKeyboard());
+      return ctx.scene.leave();
+    }
+
+    if (mode === 'add_force_channel') {
+      if (!/^@?[a-zA-Z0-9_]{5,}$/.test(value)) {
+        await ctx.reply('Kanal username noto‘g‘ri. Masalan: @kanal');
+        return;
+      }
+
+      const username = cleanSupportUsername(value);
+      const list = await getForceJoinChannels();
+      const exists = list.some((item) => cleanSupportUsername(item.username) === username);
+      if (exists) {
+        await ctx.reply('Bu kanal allaqachon qo‘shilgan.', adminMainKeyboard());
+        return ctx.scene.leave();
+      }
+
+      list.push({ username, title: `@${username}`, chat_id: `@${username}` });
+      await setSetting('force_join_channels', list);
+      await ctx.reply('✅ Kanal qo‘shildi.', adminMainKeyboard());
+      return ctx.scene.leave();
+    }
+
+    if (mode === 'remove_force_channel') {
+      const username = cleanSupportUsername(value);
+      const list = await getForceJoinChannels();
+      const filtered = list.filter((item) => cleanSupportUsername(item.username) !== username);
+      await setSetting('force_join_channels', filtered);
+      await ctx.reply('✅ Kanal o‘chirildi.', adminMainKeyboard());
+      return ctx.scene.leave();
+    }
+
+    if (['welcome_text', 'faq_text', 'rules_text'].includes(mode)) {
+      await setSetting(mode, value);
+      await ctx.reply('✅ Matn yangilandi.', adminMainKeyboard());
+      return ctx.scene.leave();
+    }
+  }
+);
+
+const stage = new Scenes.Stage([orderScene, broadcastScene, settingsEditScene]);
+
+bot.use(session());
+bot.use(stage.middleware());
+bot.use(async (ctx, next) => {
+  try {
+    await saveUser(ctx);
+  } catch (error) {
+    console.error('saveUser error:', error);
+  }
+  return next();
+});
+bot.use(guardPrivateAndSubscribed);
+
+bot.start(async (ctx) => {
+  await ctx.reply(getSetting('welcome_text'), userMainKeyboard(isAdmin(ctx)));
+});
+
+bot.action('CHECK_FORCE_JOIN', async (ctx) => {
+  const passed = await isForceJoinPassed(ctx);
+  await ctx.answerCbQuery(passed ? 'Tasdiqlandi' : 'Hali obuna bo‘linmagan');
+  if (!passed) {
+    await showForceJoinMessage(ctx);
+    return;
+  }
+  try {
+    await ctx.editMessageText('✅ Obuna tasdiqlandi. Endi botdan foydalanishingiz mumkin.');
+  } catch {}
+  await ctx.reply('Asosiy menyu:', userMainKeyboard(isAdmin(ctx)));
+});
+
+bot.hears('🛍 Xizmatlar', async (ctx) => {
+  await ctx.reply('🛍 Kategoriyani tanlang:', { reply_markup: buildCategoriesKeyboard().reply_markup });
+});
+
+bot.action(/^CAT_(\d+)$/, async (ctx) => {
+  const categoryId = Number(ctx.match[1]);
+  const category = findCategoryById(categoryId);
+  if (!category || Number(category.is_active) !== 1) {
+    await ctx.answerCbQuery('Kategoriya topilmadi.');
+    return;
+  }
+
+  const services = ensureTable('services')
+    .filter((s) => Number(s.category_id) === categoryId && Number(s.is_active) === 1)
+    .sort((a, b) => a.id - b.id);
+
+  if (!services.length) {
+    await ctx.answerCbQuery('Bu kategoriyada xizmatlar yo‘q.');
+    return;
+  }
+
+  const buttons = services.map((s) => [Markup.button.callback(`${s.title} — ${s.price > 0 ? formatPrice(s.price) : 'Kelishiladi'}`, `SVC_${s.id}`)]);
+  buttons.push([Markup.button.callback('🔙 Orqaga', 'OPEN_CATEGORIES')]);
+
+  await ctx.answerCbQuery();
+  await ctx.editMessageText(`📂 ${category.title}\n\nKerakli xizmatni tanlang:`, { reply_markup: Markup.inlineKeyboard(buttons).reply_markup });
+});
+
+bot.action('OPEN_CATEGORIES', async (ctx) => {
+  await ctx.answerCbQuery();
+  try {
+    await ctx.editMessageText('🛍 Kategoriyani tanlang:', { reply_markup: buildCategoriesKeyboard().reply_markup });
+  } catch {
+    await ctx.reply('🛍 Kategoriyani tanlang:', { reply_markup: buildCategoriesKeyboard().reply_markup });
+  }
+});
+
+bot.action(/^SVC_(\d+)$/, async (ctx) => {
+  const serviceId = Number(ctx.match[1]);
+  const service = findServiceById(serviceId);
+  if (!service || Number(service.is_active) !== 1) {
+    await ctx.answerCbQuery('Xizmat topilmadi.');
+    return;
+  }
+
+  const message = [
+    `📦 ${service.title}`,
+    ``,
+    `📝 ${service.description || '-'}`,
+    `💰 Narx: ${service.price > 0 ? formatPrice(service.price) : 'Kelishiladi'}`,
+    `⏱ Muddat: ${service.delivery_time || '-'}`,
+    service.notes ? `ℹ️ ${service.notes}` : '',
+  ].filter(Boolean).join('\n');
+
+  await ctx.answerCbQuery();
+  await ctx.editMessageText(message, {
+    reply_markup: Markup.inlineKeyboard([
+      [Markup.button.callback('🛒 Buyurtma berish', `BUY_${service.id}`)],
+      [Markup.button.callback('🔙 Orqaga', `CAT_${service.category_id}`)],
+    ]).reply_markup,
+  });
+});
+
+bot.action(/^BUY_(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  return ctx.scene.enter('ORDER_SCENE', { serviceId: Number(ctx.match[1]) });
+});
+
+bot.hears('📦 Buyurtmalarim', async (ctx) => {
+  const orders = ensureTable('orders')
+    .filter((o) => Number(o.user_id) === Number(ctx.from.id))
+    .sort((a, b) => Number(b.id) - Number(a.id))
+    .slice(0, 10);
+
+  if (!orders.length) {
+    await ctx.reply('Sizda hali buyurtmalar yo‘q.');
+    return;
+  }
+
+  let text = '📦 Oxirgi buyurtmalaringiz:\n\n';
+  for (const order of orders) {
+    text += `#${order.id} | ${order.service_title}\n`;
+    text += `💰 ${order.amount > 0 ? formatPrice(order.amount) : 'Kelishiladi'}\n`;
+    text += `🏷 ${order.status}\n`;
+    text += `📅 ${new Date(order.created_at).toLocaleString('uz-UZ')}\n`;
+    if (order.admin_comment) text += `💬 ${order.admin_comment}\n`;
+    text += '\n';
+  }
+
+  await ctx.reply(text);
+});
+
+bot.hears('💳 To‘lov usullari', async (ctx) => {
+  const methods = ensureTable('payment_methods');
+  if (!methods.length) {
+    await ctx.reply('To‘lov usullari hali qo‘shilmagan.');
+    return;
+  }
+
+  let text = '💳 To‘lov usullari:\n\n';
+  for (const m of methods.filter((item) => Number(item.is_active) === 1)) {
+    text += `${m.title}\n${m.details}\n\n`;
+  }
+  await ctx.reply(text);
+});
+
+bot.hears(/^(📩 Admin bilan bog‘lanish|📩 Admin)$/u, async (ctx) => {
+  const username = cleanSupportUsername(getSetting('support_username'));
+  if (!username) {
+    await ctx.reply('Admin username hali sozlanmagan.');
+    return;
+  }
+
+  await ctx.reply(`Admin bilan bog‘lanish: @${username}`, {
+    reply_markup: Markup.inlineKeyboard([
+      [Markup.button.url('Admin ochish', `https://t.me/${username}`)],
+    ]).reply_markup,
+  });
+});
+
+bot.hears(/^(❓ Yordam)$/u, async (ctx) => {
+  await ctx.reply(getSetting('faq_text'));
+});
+
+bot.hears(/^(ℹ️ Bot haqida)$/u, async (ctx) => {
+  await ctx.reply(getSetting('rules_text'));
+});
+
+bot.hears('⚙️ Admin panel', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  await ctx.reply('🛠 Admin panelga xush kelibsiz.', adminMainKeyboard());
+});
+
+bot.command('admin', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  await ctx.reply('🛠 Admin panelga xush kelibsiz.', adminMainKeyboard());
+});
+
+bot.hears('📊 Statistika', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const users = ensureTable('users').length;
+  const orders = ensureTable('orders').length;
+  const payments = ensureTable('payments');
+  const completedRevenue = ensureTable('orders')
+    .filter((o) => o.status === ORDER_STATUS.COMPLETED)
+    .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+  const text = [
+    '📊 Real-time statistika',
+    '',
+    `👥 Foydalanuvchilar: ${users}`,
+    `📦 Buyurtmalar: ${orders}`,
+    `🕓 Yangi: ${ensureTable('orders').filter((o) => o.status === ORDER_STATUS.NEW).length}`,
+    `💳 Tekshiruvda: ${ensureTable('orders').filter((o) => o.status === ORDER_STATUS.PENDING_VERIFY).length}`,
+    `🚀 Jarayonda: ${ensureTable('orders').filter((o) => o.status === ORDER_STATUS.PROCESSING).length}`,
+    `✅ Bajarilgan: ${ensureTable('orders').filter((o) => o.status === ORDER_STATUS.COMPLETED).length}`,
+    `❌ Bekor qilingan: ${ensureTable('orders').filter((o) => o.status === ORDER_STATUS.CANCELED).length}`,
+    '',
+    `💰 Kutilayotgan to‘lovlar: ${payments.filter((p) => p.status === PAYMENT_STATUS.PENDING).length}`,
+    `✅ Tasdiqlangan to‘lovlar: ${payments.filter((p) => p.status === PAYMENT_STATUS.APPROVED).length}`,
+    '',
+    `💵 Jami daromad: ${formatPrice(completedRevenue)}`,
+  ].join('\n');
+
+  await ctx.reply(text, adminMainKeyboard());
+});
+
+bot.hears('📦 Buyurtmalar', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const orders = ensureTable('orders')
+    .sort((a, b) => Number(b.id) - Number(a.id))
+    .slice(0, 15);
+
+  if (!orders.length) {
+    await ctx.reply('Buyurtmalar topilmadi.', adminMainKeyboard());
+    return;
+  }
+
+  for (const order of orders) {
+    const payment = findPaymentByOrderId(order.id);
+    const user = findUserByTelegramId(order.user_id);
+
+    const text = [
+      `🆔 Buyurtma #${order.id}`,
+      `👤 Mijoz: ${user?.first_name || 'User'}${user?.username ? ` (@${user.username})` : ''}`,
+      `📦 Xizmat: ${order.service_title}`,
+      `💰 Summa: ${order.amount > 0 ? formatPrice(order.amount) : 'Kelishiladi'}`,
+      `🏷 Holat: ${order.status}`,
+      `📅 Sana: ${new Date(order.created_at).toLocaleString('uz-UZ')}`,
+      '',
+      '📝 Tafsilotlar:',
+      formatOrderDetails(order.details),
+      payment ? `\n💳 To‘lov: ${payment.method} | ${payment.status}` : '',
+    ].filter(Boolean).join('\n');
+
+    await ctx.reply(text, { reply_markup: buildOrderAdminActions(order.id).reply_markup });
+  }
+});
+
+bot.hears('💰 To‘lovlar', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const payments = ensureTable('payments')
+    .filter((p) => p.status === PAYMENT_STATUS.PENDING)
+    .sort((a, b) => Number(b.id) - Number(a.id))
+    .slice(0, 15);
+
+  if (!payments.length) {
+    await ctx.reply('Kutilayotgan to‘lovlar yo‘q.', adminMainKeyboard());
+    return;
+  }
+
+  for (const payment of payments) {
+    const order = findOrderById(payment.order_id);
+    const caption = [
+      '💰 To‘lov tekshiruvi',
+      '',
+      `Buyurtma ID: #${payment.order_id}`,
+      `Xizmat: ${order?.service_title || '-'}`,
+      `To‘lovchi: ${payment.payer_name || '-'}`,
+      `Usul: ${payment.method || '-'}`,
+      `Summa: ${formatPrice(payment.amount)}`,
+      `Sana: ${new Date(payment.created_at).toLocaleString('uz-UZ')}`,
+    ].join('\n');
+
+    try {
+      await ctx.replyWithPhoto(payment.receipt_file_id, {
+        caption,
+        reply_markup: Markup.inlineKeyboard([
+          [Markup.button.callback('✅ Tasdiqlash', `APPROVE_PAY_${payment.order_id}`), Markup.button.callback('❌ Rad etish', `REJECT_PAY_${payment.order_id}`)],
+        ]).reply_markup,
+      });
+    } catch {
+      await ctx.reply(caption);
+    }
+  }
+});
+
+bot.hears('📣 Xabar yuborish', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  return ctx.scene.enter('BROADCAST_SCENE');
+});
+
+bot.hears('🗂 Kategoriyalar', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const categories = ensureTable('categories').sort((a, b) => Number(a.sort_order) - Number(b.sort_order));
+  let text = '🗂 Kategoriyalar:\n\n';
+  for (const item of categories) {
+    text += `${item.sort_order}. ${item.title} ${Number(item.is_active) === 1 ? '✅' : '❌'}\n`;
+  }
+  await ctx.reply(text, adminMainKeyboard());
+});
+
+bot.hears('🛠 Xizmatlar', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const services = ensureTable('services').sort((a, b) => Number(a.id) - Number(b.id));
+  let text = '🛠 Xizmatlar ro‘yxati:\n\n';
+  for (const item of services) {
+    text += `#${item.id} | ${item.title}\n`;
+    text += `📂 Kategoriya ID: ${item.category_id}\n`;
+    text += `💰 ${item.price > 0 ? formatPrice(item.price) : 'Kelishiladi'}\n`;
+    text += `⏱ ${item.delivery_time || '-'}\n`;
+    text += `${Number(item.is_active) === 1 ? '✅ Faol' : '❌ Nofaol'}\n\n`;
+  }
+  await ctx.reply(text, adminMainKeyboard());
+});
+
+bot.hears('🧾 To‘lov usullari', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const methods = ensureTable('payment_methods');
+  let text = '🧾 To‘lov usullari:\n\n';
+  for (const item of methods) {
+    text += `${item.title} ${Number(item.is_active) === 1 ? '✅' : '❌'}\n${item.details}\n\n`;
+  }
+  await ctx.reply(text, adminMainKeyboard());
+});
+
+bot.hears('👥 Foydalanuvchilar', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const users = ensureTable('users')
+    .sort((a, b) => new Date(b.join_date).getTime() - new Date(a.join_date).getTime())
+    .slice(0, 30);
+  let text = '👥 So‘nggi foydalanuvchilar:\n\n';
+  for (const user of users) {
+    text += `• ${user.first_name || '-'}${user.username ? ` (@${user.username})` : ''} | ID: ${user.telegram_id}\n`;
+  }
+  await ctx.reply(text, adminMainKeyboard());
+});
+
+bot.hears('⚙️ Sozlamalar', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const channels = await getForceJoinChannels();
+  const info = [
+    '⚙️ Sozlamalar',
+    '',
+    `Majburiy obuna: ${getSetting('force_join_enabled', false) ? 'Yoqilgan' : 'O‘chirilgan'}`,
+    `Kanallar soni: ${channels.length}`,
+    `Admin username: @${cleanSupportUsername(getSetting('support_username')) || '-'}`,
+  ].join('\n');
+  await ctx.reply(info, { reply_markup: buildSettingsKeyboard().reply_markup });
+});
+
+bot.action('TOGGLE_FORCE_JOIN', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const current = Boolean(getSetting('force_join_enabled', false));
+  await setSetting('force_join_enabled', !current);
+  await ctx.answerCbQuery(!current ? 'Yoqildi' : 'O‘chirildi');
+  await ctx.editMessageText(`⚙️ Majburiy obuna: ${!current ? 'Yoqilgan' : 'O‘chirilgan'}`, {
+    reply_markup: buildSettingsKeyboard().reply_markup,
+  });
+});
+
+bot.action('VIEW_FORCE_CHANNELS', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const list = await getForceJoinChannels();
+  const text = list.length
+    ? `📢 Kanallar:\n\n${list.map((item, i) => `${i + 1}. @${cleanSupportUsername(item.username)}`).join('\n')}`
+    : '📢 Hozircha majburiy obuna kanallari qo‘shilmagan.';
+  await ctx.answerCbQuery();
+  await ctx.reply(text, adminMainKeyboard());
+});
+
+bot.action('ADD_FORCE_CHANNEL', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  return ctx.scene.enter('SETTINGS_EDIT_SCENE', { mode: 'add_force_channel' });
+});
+
+bot.action('REMOVE_FORCE_CHANNEL', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  return ctx.scene.enter('SETTINGS_EDIT_SCENE', { mode: 'remove_force_channel' });
+});
+
+bot.action('EDIT_WELCOME_TEXT', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  return ctx.scene.enter('SETTINGS_EDIT_SCENE', { mode: 'welcome_text' });
+});
+
+bot.action('EDIT_FAQ_TEXT', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  return ctx.scene.enter('SETTINGS_EDIT_SCENE', { mode: 'faq_text' });
+});
+
+bot.action('EDIT_RULES_TEXT', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  return ctx.scene.enter('SETTINGS_EDIT_SCENE', { mode: 'rules_text' });
+});
+
+bot.action('EDIT_SUPPORT_USERNAME', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  return ctx.scene.enter('SETTINGS_EDIT_SCENE', { mode: 'support_username' });
+});
+
+bot.action(/^APPROVE_PAY_(\d+)$/, async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const orderId = Number(ctx.match[1]);
+  const order = findOrderById(orderId);
+  if (!order) {
+    await ctx.answerCbQuery('Buyurtma topilmadi.');
+    return;
+  }
+
+  const payment = findPaymentByOrderId(orderId);
+  if (payment) payment.status = PAYMENT_STATUS.APPROVED;
+  order.status = ORDER_STATUS.CONFIRMED;
+  order.updated_at = nowIso();
+
+  await saveData();
+  await logAction('PAYMENT_APPROVED', `order_id=${orderId}`);
+
+  await ctx.answerCbQuery('Tasdiqlandi');
+  try {
+    await ctx.editMessageReplyMarkup({ reply_markup: buildOrderAdminActions(orderId).reply_markup });
+  } catch {}
+
+  try {
+    await ctx.telegram.sendMessage(order.user_id, `✅ To‘lovingiz tasdiqlandi. Buyurtmangiz (#${orderId}) tez orada ishga olinadi.`);
+  } catch {}
+});
+
+bot.action(/^REJECT_PAY_(\d+)$/, async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const orderId = Number(ctx.match[1]);
+  const order = findOrderById(orderId);
+  if (!order) {
+    await ctx.answerCbQuery('Buyurtma topilmadi.');
+    return;
+  }
+
+  const payment = findPaymentByOrderId(orderId);
+  if (payment) payment.status = PAYMENT_STATUS.REJECTED;
+  order.status = ORDER_STATUS.NEW;
+  order.updated_at = nowIso();
+  order.admin_comment = 'To‘lov rad etildi';
+
+  await saveData();
+  await logAction('PAYMENT_REJECTED', `order_id=${orderId}`);
+
+  await ctx.answerCbQuery('Rad etildi');
+  try {
+    await ctx.telegram.sendMessage(order.user_id, `❌ To‘lovingiz rad etildi. Iltimos, admin bilan bog‘laning yoki chekni qayta yuboring. Buyurtma #${orderId}`);
+  } catch {}
+});
+
+bot.action(/^START_WORK_(\d+)$/, async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const orderId = Number(ctx.match[1]);
+  const order = findOrderById(orderId);
+  if (!order) {
+    await ctx.answerCbQuery('Buyurtma topilmadi.');
+    return;
+  }
+
+  order.status = ORDER_STATUS.PROCESSING;
+  order.updated_at = nowIso();
+  await saveData();
+  await logAction('ORDER_STARTED', `order_id=${orderId}`);
+
+  await ctx.answerCbQuery('Jarayonga olindi');
+  try {
+    await ctx.telegram.sendMessage(order.user_id, `🚀 Buyurtmangiz (#${orderId}) jarayonga olindi.`);
+  } catch {}
+});
+
+bot.action(/^COMPLETE_ORDER_(\d+)$/, async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const orderId = Number(ctx.match[1]);
+  const order = findOrderById(orderId);
+  if (!order) {
+    await ctx.answerCbQuery('Buyurtma topilmadi.');
+    return;
+  }
+
+  order.status = ORDER_STATUS.COMPLETED;
+  order.updated_at = nowIso();
+  await saveData();
+  await logAction('ORDER_COMPLETED', `order_id=${orderId}`);
+
+  await ctx.answerCbQuery('Bajarildi');
+  try {
+    await ctx.telegram.sendMessage(order.user_id, `✅ Buyurtmangiz bajarildi.\n\nID: #${orderId}\nXizmat: ${order.service_title}`);
+  } catch {}
+});
+
+bot.action(/^ADMIN_CANCEL_ORDER_(\d+)$/, async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const orderId = Number(ctx.match[1]);
+  const order = findOrderById(orderId);
+  if (!order) {
+    await ctx.answerCbQuery('Buyurtma topilmadi.');
+    return;
+  }
+
+  order.status = ORDER_STATUS.CANCELED;
+  order.updated_at = nowIso();
+  await saveData();
+  await logAction('ORDER_CANCELED', `order_id=${orderId}`);
+
+  await ctx.answerCbQuery('Bekor qilindi');
+  try {
+    await ctx.telegram.sendMessage(order.user_id, `❌ Buyurtmangiz bekor qilindi.\n\nID: #${orderId}`);
+  } catch {}
+});
+
+bot.action('BACK_MAIN_MENU', async (ctx) => {
+  await ctx.answerCbQuery('Asosiy menyu');
+  try {
+    await ctx.editMessageText('🏠 Asosiy menyu');
+  } catch {}
+  await ctx.reply('Asosiy menyu:', userMainKeyboard(isAdmin(ctx)));
+});
+
+bot.hears('🏠 Asosiy menyu', async (ctx) => {
+  await ctx.reply('Asosiy menyu:', userMainKeyboard(isAdmin(ctx)));
+});
+
+bot.catch((error, ctx) => {
+  console.error(`BOT ERROR [${ctx.updateType}]`, error);
+  try {
+    ctx.reply('Xatolik yuz berdi. Iltimos, qaytadan urinib ko‘ring.');
+  } catch {}
+});
+
+async function main() {
+  await initDB();
+  await bot.launch();
+  console.log('✅ Bot ishga tushdi');
+  console.log('👨‍💼 ADMIN_IDS:', ADMIN_IDS);
+  console.log('📁 DATA_PATH:', DATA_PATH);
+}
+
+main().catch((error) => {
+  console.error('START ERROR:', error);
+  process.exit(1);
+});
+
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));

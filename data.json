@@ -1,0 +1,345 @@
+{
+  "counters": {
+    "categories": 4,
+    "services": 15,
+    "orders": 0,
+    "payments": 0,
+    "payment_methods": 2,
+    "users": 3,
+    "logs": 0
+  },
+  "users": [
+    {
+      "id": 1,
+      "telegram_id": 8263756457,
+      "first_name": "Abdulatif",
+      "last_name": "Turajanov",
+      "username": "turajanov1",
+      "role": "user",
+      "is_banned": 0,
+      "join_date": "2026-04-24T17:22:42.790Z",
+      "last_active": "2026-04-24T17:40:20.029Z"
+    },
+    {
+      "id": 2,
+      "telegram_id": 5059260977,
+      "first_name": "ت",
+      "last_name": "",
+      "username": "pro_xizmat1",
+      "role": "admin",
+      "is_banned": 0,
+      "join_date": "2026-04-24T17:24:26.978Z",
+      "last_active": "2026-04-24T18:10:20.476Z"
+    },
+    {
+      "id": 3,
+      "telegram_id": 1013383124,
+      "first_name": "٧",
+      "last_name": "",
+      "username": "torajanov7",
+      "role": "user",
+      "is_banned": 0,
+      "join_date": "2026-04-24T17:39:47.578Z",
+      "last_active": "2026-04-24T17:43:16.083Z"
+    }
+  ],
+  "categories": [
+    {
+      "id": 1,
+      "title": "⭐ Telegram Premium",
+      "sort_order": 1,
+      "is_active": 1,
+      "created_at": "2026-04-24T17:18:34.628Z"
+    },
+    {
+      "id": 2,
+      "title": "📈 SMM xizmatlari",
+      "sort_order": 2,
+      "is_active": 1,
+      "created_at": "2026-04-24T17:18:34.629Z"
+    },
+    {
+      "id": 3,
+      "title": "👥 Aktiv kontakt",
+      "sort_order": 3,
+      "is_active": 1,
+      "created_at": "2026-04-24T17:18:34.629Z"
+    },
+    {
+      "id": 4,
+      "title": "📦 Maxsus xizmat",
+      "sort_order": 4,
+      "is_active": 1,
+      "created_at": "2026-04-24T17:18:34.629Z"
+    }
+  ],
+  "services": [
+    {
+      "id": 1,
+      "created_at": "2026-04-24T17:18:34.630Z",
+      "category_id": 1,
+      "title": "Telegram Premium 1 oylik",
+      "button_title": "1 oylik — 55 000",
+      "description": "Telegram Premium 1 oylik tarif. Username yuborasiz, to‘lovdan keyin buyurtma ishga olinadi.",
+      "price": 55000,
+      "type": "standard",
+      "required_fields": [
+        "target"
+      ],
+      "delivery_time": "10 daqiqa - 24 soat",
+      "sort_order": 1,
+      "is_active": 1
+    },
+    {
+      "id": 2,
+      "created_at": "2026-04-24T17:18:34.630Z",
+      "category_id": 1,
+      "title": "Telegram Premium 3 oylik",
+      "button_title": "3 oylik — 190 000",
+      "description": "Telegram Premium 3 oylik tarif.",
+      "price": 190000,
+      "type": "standard",
+      "required_fields": [
+        "target"
+      ],
+      "delivery_time": "10 daqiqa - 24 soat",
+      "sort_order": 2,
+      "is_active": 1
+    },
+    {
+      "id": 3,
+      "created_at": "2026-04-24T17:18:34.630Z",
+      "category_id": 1,
+      "title": "Telegram Premium 6 oylik",
+      "button_title": "6 oylik — 270 000",
+      "description": "Telegram Premium 6 oylik tarif.",
+      "price": 270000,
+      "type": "standard",
+      "required_fields": [
+        "target"
+      ],
+      "delivery_time": "10 daqiqa - 24 soat",
+      "sort_order": 3,
+      "is_active": 1
+    },
+    {
+      "id": 4,
+      "created_at": "2026-04-24T17:18:34.630Z",
+      "category_id": 1,
+      "title": "Telegram Premium 1 yillik",
+      "button_title": "1 yillik — 340 000",
+      "description": "Telegram Premium 1 yillik tarif.",
+      "price": 340000,
+      "type": "standard",
+      "required_fields": [
+        "target"
+      ],
+      "delivery_time": "10 daqiqa - 24 soat",
+      "sort_order": 4,
+      "is_active": 1
+    },
+    {
+      "id": 5,
+      "created_at": "2026-04-24T17:18:34.630Z",
+      "category_id": 2,
+      "title": "Instagram oddiy nakrutka",
+      "button_title": "Instagram oddiy",
+      "description": "Instagram oddiy nakrutka. Minimal buyurtma: 1000 ta. 1000 tasi: 35 000 so‘m.",
+      "price_per_1000": 35000,
+      "min_quantity": 1000,
+      "type": "dynamic_quantity",
+      "required_fields": [
+        "target",
+        "quantity"
+      ],
+      "delivery_time": "Tezkor",
+      "sort_order": 1,
+      "is_active": 1
+    },
+    {
+      "id": 6,
+      "created_at": "2026-04-24T17:18:34.630Z",
+      "category_id": 2,
+      "title": "Instagram bez minus 1 yillik",
+      "button_title": "Instagram bez minus",
+      "description": "Instagram bez minus 1 yillik. Minimal buyurtma: 1000 ta. 1000 tasi: 50 000 so‘m.",
+      "price_per_1000": 50000,
+      "min_quantity": 1000,
+      "type": "dynamic_quantity",
+      "required_fields": [
+        "target",
+        "quantity"
+      ],
+      "delivery_time": "Tezkor",
+      "sort_order": 2,
+      "is_active": 1
+    },
+    {
+      "id": 7,
+      "created_at": "2026-04-24T17:18:34.630Z",
+      "category_id": 2,
+      "title": "TikTok nakrutka",
+      "button_title": "TikTok nakrutka",
+      "description": "TikTok uchun nakrutka xizmati. Tafsilot admin bilan kelishiladi.",
+      "price": 0,
+      "type": "custom_text",
+      "required_fields": [
+        "target",
+        "note"
+      ],
+      "delivery_time": "Kelishiladi",
+      "sort_order": 3,
+      "is_active": 1
+    },
+    {
+      "id": 8,
+      "created_at": "2026-04-24T17:18:34.630Z",
+      "category_id": 2,
+      "title": "YouTube nakrutka",
+      "button_title": "YouTube nakrutka",
+      "description": "YouTube uchun nakrutka xizmati. Tafsilot admin bilan kelishiladi.",
+      "price": 0,
+      "type": "custom_text",
+      "required_fields": [
+        "target",
+        "note"
+      ],
+      "delivery_time": "Kelishiladi",
+      "sort_order": 4,
+      "is_active": 1
+    },
+    {
+      "id": 9,
+      "created_at": "2026-04-24T17:18:34.630Z",
+      "category_id": 3,
+      "title": "Kanal/guruhga aktiv jonli kontakt — 500",
+      "button_title": "500 — 25 ming",
+      "description": "Guruh yoki kanalga aktiv jonli kontakt qo‘shish. Paket: 500 ta.",
+      "price": 25000,
+      "type": "standard",
+      "required_fields": [
+        "target"
+      ],
+      "delivery_time": "Kelishiladi",
+      "sort_order": 1,
+      "is_active": 1
+    },
+    {
+      "id": 10,
+      "created_at": "2026-04-24T17:18:34.630Z",
+      "category_id": 3,
+      "title": "Kanal/guruhga aktiv jonli kontakt — 1000 + 100 bonus",
+      "button_title": "1000 — 50 ming +100 bonus",
+      "description": "Aktiv jonli kontakt. Paket: 1000 ta + 100 bonus.",
+      "price": 50000,
+      "type": "standard",
+      "required_fields": [
+        "target"
+      ],
+      "delivery_time": "Kelishiladi",
+      "sort_order": 2,
+      "is_active": 1
+    },
+    {
+      "id": 11,
+      "created_at": "2026-04-24T17:18:34.630Z",
+      "category_id": 3,
+      "title": "Kanal/guruhga aktiv jonli kontakt — 2000 + 200 bonus",
+      "button_title": "2000 — 100 ming +200 bonus",
+      "description": "Aktiv jonli kontakt. Paket: 2000 ta + 200 bonus.",
+      "price": 100000,
+      "type": "standard",
+      "required_fields": [
+        "target"
+      ],
+      "delivery_time": "Kelishiladi",
+      "sort_order": 3,
+      "is_active": 1
+    },
+    {
+      "id": 12,
+      "created_at": "2026-04-24T17:18:34.630Z",
+      "category_id": 3,
+      "title": "Kanal/guruhga aktiv jonli kontakt — 3000 + 300 bonus",
+      "button_title": "3000 — 150 ming +300 bonus",
+      "description": "Aktiv jonli kontakt. Paket: 3000 ta + 300 bonus.",
+      "price": 150000,
+      "type": "standard",
+      "required_fields": [
+        "target"
+      ],
+      "delivery_time": "Kelishiladi",
+      "sort_order": 4,
+      "is_active": 1
+    },
+    {
+      "id": 13,
+      "created_at": "2026-04-24T17:18:34.630Z",
+      "category_id": 3,
+      "title": "Kanal/guruhga aktiv jonli kontakt — 4000 + 400 bonus",
+      "button_title": "4000 — 200 ming +400 bonus",
+      "description": "Aktiv jonli kontakt. Paket: 4000 ta + 400 bonus.",
+      "price": 200000,
+      "type": "standard",
+      "required_fields": [
+        "target"
+      ],
+      "delivery_time": "Kelishiladi",
+      "sort_order": 5,
+      "is_active": 1
+    },
+    {
+      "id": 14,
+      "created_at": "2026-04-24T17:18:34.630Z",
+      "category_id": 3,
+      "title": "Kanal/guruhga aktiv jonli kontakt — 5000 + 500 bonus",
+      "button_title": "5000 — 250 ming +500 bonus",
+      "description": "Aktiv jonli kontakt. Paket: 5000 ta + 500 bonus.",
+      "price": 250000,
+      "type": "standard",
+      "required_fields": [
+        "target"
+      ],
+      "delivery_time": "Kelishiladi",
+      "sort_order": 6,
+      "is_active": 1
+    },
+    {
+      "id": 15,
+      "created_at": "2026-04-24T17:18:34.630Z",
+      "category_id": 4,
+      "title": "Maxsus xizmat",
+      "button_title": "Maxsus xizmat",
+      "description": "Sizga kerakli xizmatni yozib qoldiring. Admin narx va muddatni aytadi.",
+      "price": 0,
+      "type": "custom_text",
+      "required_fields": [
+        "note"
+      ],
+      "delivery_time": "Kelishiladi",
+      "sort_order": 1,
+      "is_active": 1
+    }
+  ],
+  "orders": [],
+  "payments": [],
+  "payment_methods": [
+    {
+      "id": 2,
+      "title": "💳 Uzcard",
+      "details": "Karta: 5440 8103 1106 5089  Ega: Begimova Sevara",
+      "is_active": 1,
+      "created_at": "2026-04-24T17:27:11.263Z"
+    }
+  ],
+  "logs": [],
+  "settings": {
+    "brand_name": "Pro Service Bot",
+    "support_username": "pro_xizmat1",
+    "force_join_enabled": false,
+    "force_join_channels": [],
+    "welcome_text": "👋 Assalomu alaykum!\n\nSevara SMM xizmatlar botiga xush kelibsiz. Pastdagi menyudan kerakli xizmatni tanlang.",
+    "faq_text": "❓ Yordam\n\n1) Xizmatni tanlang.\n2) Username yoki link yuboring.\n3) Miqdorni kiriting.\n4) To‘lov qiling va chek yuboring.\n5) Admin tasdiqlagach buyurtma ishga olinadi.",
+    "rules_text": "ℹ️ Bot haqida\n\nBu bot orqali Telegram Premium, SMM nakrutka, kanal/guruh uchun aktiv jonli kontakt va boshqa xizmatlarni buyurtma qilishingiz mumkin."
+  }
+}
